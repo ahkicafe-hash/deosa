@@ -134,20 +134,19 @@
         _connecting = true;
         setVoiceUI('connecting');
 
-        /* Ring twice — resolves after ~2.4 s */
-        await _ringTwice();
-
-        /* Bail if the call was cancelled during the ring */
-        if (!_connecting) return;
-
         try {
-            /* Explicit mic permission request before SDK touches it */
-            await navigator.mediaDevices.getUserMedia({ audio: true });
+            /* Ring, mic permission, and SDK fetch all run in parallel —
+             * eliminates 1–3 s of sequential latency, especially on mobile. */
+            const [,, sdkModule] = await Promise.all([
+                _ringTwice(),
+                navigator.mediaDevices.getUserMedia({ audio: true }),
+                import('https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm')
+            ]);
 
-            /* Pinned version — never breaks on a silent @latest update */
-            const { Conversation } = await import(
-                'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm'
-            );
+            /* Bail if the call was cancelled during the ring */
+            if (!_connecting) return;
+
+            const { Conversation } = sdkModule;
 
             /* Merge page-specific tools with universal tools */
             var pageTools = window.VOICE_CLIENT_TOOLS || {};
