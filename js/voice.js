@@ -49,6 +49,9 @@
             var ctx;
             try {
                 ctx = new (window.AudioContext || window.webkitAudioContext)();
+                /* iOS Safari creates AudioContext in suspended state — must
+                 * resume() within the user-gesture call stack to unlock audio. */
+                if (ctx.state === 'suspended') { ctx.resume(); }
                 var t = ctx.currentTime;
 
                 [400, 450].forEach(function (freq) {
@@ -141,8 +144,12 @@
         if (!_connecting) return;
 
         try {
-            /* Explicit mic permission request before SDK touches it */
-            await navigator.mediaDevices.getUserMedia({ audio: true });
+            /* Explicit mic permission request before SDK touches it.
+             * Tracks are stopped immediately — on iOS Safari, leaving a
+             * MediaStream open holds the mic exclusively and blocks the
+             * SDK's own WebRTC getUserMedia call from succeeding. */
+            const _permStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            _permStream.getTracks().forEach(function (t) { t.stop(); });
 
             /* Pinned version — never breaks on a silent @latest update */
             const { Conversation } = await import(
