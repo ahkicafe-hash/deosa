@@ -23,7 +23,7 @@
         }
         #ai-voice-btn.voice-connecting {
             animation: voice-connecting-spin 1.2s linear infinite,
-                       none !important; /* override pulse-glow when connecting */
+                       none !important;
         }
         #ai-voice-btn.voice-error {
             border-color: rgba(239,68,68,0.85) !important;
@@ -39,11 +39,9 @@
         const liveIcon = document.getElementById('ai-live-icon');
         if (!btn) return;
 
-        /* Reset all dynamic classes / styles */
         btn.classList.remove('ai-live-glow', 'voice-connecting', 'voice-error');
         btn.style.opacity = '1';
 
-        /* Show idle phone icon by default */
         if (idleIcon) idleIcon.classList.remove('hidden');
         if (liveIcon) { liveIcon.classList.add('hidden'); liveIcon.classList.remove('flex'); }
 
@@ -54,29 +52,25 @@
                 if (idleIcon) idleIcon.classList.add('hidden');
                 if (liveIcon) { liveIcon.classList.remove('hidden'); liveIcon.classList.add('flex'); }
                 break;
-
             case 'listening':
                 btn.classList.add('ai-live-glow');
                 if (idleIcon) idleIcon.classList.add('hidden');
                 if (liveIcon) { liveIcon.classList.remove('hidden'); liveIcon.classList.add('flex'); }
                 break;
-
             case 'speaking':
                 btn.classList.add('ai-live-glow');
                 if (idleIcon) idleIcon.classList.add('hidden');
                 if (liveIcon) { liveIcon.classList.remove('hidden'); liveIcon.classList.add('flex'); }
                 break;
-
             case 'error':
                 btn.classList.add('voice-error');
                 break;
-
-            default: /* idle */
+            default:
                 break;
         }
     }
 
-    /* ── Build a time-based greeting in UK time ── */
+    /* ── Current UK greeting word ── */
     function _ukGreeting() {
         var now    = new Date();
         var ukTime = new Date(now.toLocaleString('en-GB', { timeZone: 'Europe/London' }));
@@ -85,18 +79,9 @@
                hour >= 12 && hour < 18 ? 'Good afternoon' : 'Good evening';
     }
 
-    /* ── Start a session ──
-     *  firstMessage (optional): overrides the agent's opening line.
-     *  If omitted, a time-aware greeting is generated automatically.
-     */
-    async function voiceStart(firstMessage) {
-        if (_active) return; /* guard against double-start */
-
-        /* Always use a dynamic greeting unless a specific handoff message was passed */
-        if (!firstMessage) {
-            firstMessage = _ukGreeting() + ", De'Osa Catering and Events, Mary speaking. How can I help you today?";
-        }
-
+    /* ── Start a session ── */
+    async function voiceStart() {
+        if (_active) return;
         setVoiceUI('connecting');
         try {
             const { Conversation } = await import(
@@ -127,9 +112,7 @@
                     if (onMenu) {
                         return "You're already on our menu page — feel free to browse!";
                     }
-                    /* Flag the destination page to auto-reconnect mid-conversation */
                     sessionStorage.setItem('deosa_voice_return', '1');
-                    /* Delay lets the assistant finish her sentence before the page changes */
                     setTimeout(function () {
                         window.location.href = 'catering.html';
                     }, 2600);
@@ -137,10 +120,16 @@
                 };
             }
 
-            /* Build session options */
-            var sessionOpts = {
+            _conv = await Conversation.startSession({
                 agentId: AGENT_ID,
                 clientTools: pageTools,
+
+                /* dynamicVariables are injected into the agent's First message
+                 * and system prompt wherever {{greeting}} appears.
+                 * No override permissions needed — this is a first-class ElevenLabs feature. */
+                dynamicVariables: {
+                    greeting: _ukGreeting()
+                },
 
                 onConnect: function () {
                     _active = true;
@@ -148,6 +137,8 @@
                 },
 
                 onDisconnect: function () {
+                    /* Server closed the socket — just clean up, do NOT call endSession()
+                     * or the SDK throws "WebSocket already CLOSING/CLOSED". */
                     if (_active) voiceCleanup();
                 },
 
@@ -163,14 +154,7 @@
                     if (!_active) return;
                     setVoiceUI(d.mode === 'speaking' ? 'speaking' : 'listening');
                 }
-            };
-
-            /* Always override the opening line so the greeting reflects real UK time */
-            sessionOpts.overrides = {
-                agent: { firstMessage: firstMessage }
-            };
-
-            _conv = await Conversation.startSession(sessionOpts);
+            });
 
         } catch (err) {
             console.error('[De\'Osa Voice] Failed to start session:', err);
@@ -185,17 +169,14 @@
     async function voiceStop() {
         _active = false;
         var conv = _conv;
-        _conv = null; /* clear first to block re-entry */
+        _conv = null;
         if (conv) {
             try { await conv.endSession(); } catch (_) { /* ignore */ }
         }
         setVoiceUI('idle');
     }
 
-    /* ── Clean up after a server-initiated disconnect ──
-     *  Does NOT call endSession() — the socket is already closed,
-     *  calling endSession() on it causes "WebSocket already CLOSING/CLOSED".
-     */
+    /* ── Clean up after server-initiated disconnect ── */
     function voiceCleanup() {
         _active = false;
         _conv   = null;
@@ -204,26 +185,16 @@
 
     /* ── Public toggle ── */
     window.toggleAIVoice = async function () {
-        /* On non-catering pages, navigate to the menu and auto-start there.
-           Use a separate flag so the fresh call starts without a firstMessage override. */
         var onCatering = window.location.pathname.toLowerCase().includes('catering');
         if (!onCatering) {
             sessionStorage.setItem('deosa_voice_autostart', '1');
             window.location.href = 'catering.html';
             return;
         }
-
-        if (_active) {
-            voiceStop();
-        } else {
-            voiceStart();
-        }
+        if (_active) { voiceStop(); } else { voiceStart(); }
     };
 
-    /* ── Helper: run after page is fully loaded ────────────────────────
-     *  Waits for window.load so all scripts/resources are ready, then
-     *  adds a small additional delay to let page animations settle.
-     */
+    /* ── Helper: fire fn after page fully loads + optional delay ── */
     function afterLoad(delay, fn) {
         if (document.readyState === 'complete') {
             setTimeout(fn, delay);
@@ -234,25 +205,16 @@
         }
     }
 
-    /* ── Fresh auto-start: user clicked Instant Quote on another page ──
-     *  No firstMessage override — starts a normal, clean session.
-     */
+    /* ── Auto-start: user pressed Instant Quote on another page ── */
     if (sessionStorage.getItem('deosa_voice_autostart') === '1') {
         sessionStorage.removeItem('deosa_voice_autostart');
-        afterLoad(600, function () { voiceStart(); });
+        afterLoad(600, voiceStart);
     }
 
-    /* ── Mid-conversation reconnect: assistant navigated user here ──────
-     *  Restarts with a handoff message so the conversation feels seamless.
-     */
+    /* ── Auto-reconnect: assistant navigated user here mid-conversation ── */
     if (sessionStorage.getItem('deosa_voice_return') === '1') {
         sessionStorage.removeItem('deosa_voice_return');
-        afterLoad(600, function () {
-            voiceStart(
-                "I'm back! You're now on the De'Osa menu page. " +
-                "Let's pick up where we left off — what would you like to add to your order?"
-            );
-        });
+        afterLoad(600, voiceStart);
     }
 
 })();
