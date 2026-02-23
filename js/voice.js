@@ -186,10 +186,25 @@
                 };
             }
 
+            /* Compute greeting from UK time (same logic as get_current_time tool) */
+            var _greeting = (function () {
+                try {
+                    var now    = new Date();
+                    var ukHour = new Date(now.toLocaleString('en-GB', { timeZone: 'Europe/London' })).getHours();
+                    return ukHour >= 5 && ukHour < 12 ? 'Good morning' :
+                           ukHour >= 12 && ukHour < 18 ? 'Good afternoon' : 'Good evening';
+                } catch (e) { return 'Good day'; }
+            })();
+
             _conv = await Conversation.startSession({
                 agentId        : AGENT_ID,
                 connectionType : 'webrtc',   /* WebRTC > WebSocket for reliability */
                 clientTools    : pageTools,
+                overrides      : {
+                    agent: {
+                        firstMessage: _greeting + ", I'm Elizabeth, your personal event consultant at De\u2019Osa Luxury Catering. May I start with your name?"
+                    }
+                },
 
                 onConnect: function () {
                     _connecting = false;
