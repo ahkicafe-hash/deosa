@@ -562,17 +562,17 @@
             <div class="p-5 rounded-lg space-y-3" style="background:rgba(28,28,28,0.04);border:1px solid rgba(28,28,28,0.08);">
                 <div class="flex justify-between font-sans text-sm text-charcoal">
                     <span>Subtotal</span>
-                    <span>£16,850.00</span>
+                    <span id="inv-subtotal">£16,850.00</span>
                 </div>
                 <div class="flex justify-between font-sans text-sm text-green-600">
-                    <span>Deposit Paid (25%)</span>
-                    <span>– £4,212.50</span>
+                    <span id="inv-deposit-label">Deposit Paid (25%)</span>
+                    <span id="inv-deposit">– £4,212.50</span>
                 </div>
                 <div class="flex justify-between pt-3 border-t border-charcoal/10">
                     <span class="font-sans text-sm font-bold text-charcoal">Balance Due</span>
-                    <span class="font-serif text-xl text-gold">£12,637.50</span>
+                    <span id="inv-balance" class="font-serif text-xl text-gold">£12,637.50</span>
                 </div>
-                <p class="font-sans text-[10px] text-charcoal">Due by 12 July 2026 · Bank transfer or card accepted</p>
+                <p id="inv-terms" class="font-sans text-[10px] text-charcoal">Due by 12 July 2026 · Bank transfer or card accepted</p>
             </div>
 
             <!-- Actions -->
@@ -1221,7 +1221,18 @@
                 const row = _findClientRow(client_name);
                 if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
                 openInvoice(row);
-                return JSON.stringify({ success: true, client: row.customer.name });
+                return JSON.stringify({
+                    success: true,
+                    client: row.customer.name,
+                    invoiceRef: '#DOC-2026-00' + row.id,
+                    name: row.customer.name,
+                    email: row.customer.email,
+                    phone: row.customer.phone,
+                    event: row.order.details,
+                    venue: row.order.venue + ' · ' + row.order.date,
+                    invoiceStatus: row.billing.invoiceStatus,
+                    callOutcome: row.call.outcome
+                });
             },
 
             /* ── 7. close_invoice_drawer ── */
@@ -1257,10 +1268,13 @@
                 const fieldMap = {
                     name: 'inv-name', email: 'inv-email', phone: 'inv-phone',
                     event: 'inv-event', venue: 'inv-venue', ref: 'invoice-ref',
-                    issued: 'inv-issued', due: 'inv-due'
+                    issued: 'inv-issued', due: 'inv-due',
+                    subtotal: 'inv-subtotal', deposit: 'inv-deposit',
+                    'deposit-label': 'inv-deposit-label', balance: 'inv-balance',
+                    terms: 'inv-terms'
                 };
                 const el = document.getElementById(fieldMap[field]);
-                if (!el) return JSON.stringify({ success: false, error: 'Unknown field "' + field + '". Valid: name, email, phone, event, venue, ref, issued, due' });
+                if (!el) return JSON.stringify({ success: false, error: 'Unknown field "' + field + '". Valid: name, email, phone, event, venue, ref, issued, due, subtotal, deposit, deposit-label, balance, terms' });
                 el.textContent = value;
                 el.style.transition = 'color 0.4s';
                 el.style.color = '#94a3b8';
@@ -1290,7 +1304,71 @@
                 return JSON.stringify({ success: true, type, contentLength: content.length });
             },
 
-            /* ── 14. search_clients ── */
+            /* ── 14. read_open_invoice ── */
+            read_open_invoice: function() {
+                const ids = {
+                    ref: 'invoice-ref', name: 'inv-name', email: 'inv-email',
+                    phone: 'inv-phone', event: 'inv-event', venue: 'inv-venue',
+                    issued: 'inv-issued', due: 'inv-due', subtotal: 'inv-subtotal',
+                    'deposit-label': 'inv-deposit-label', deposit: 'inv-deposit',
+                    balance: 'inv-balance', terms: 'inv-terms'
+                };
+                const result = {};
+                Object.entries(ids).forEach(([key, id]) => {
+                    const el = document.getElementById(id);
+                    result[key] = el ? el.textContent.trim() : '';
+                });
+                const lineItems = [];
+                document.querySelectorAll('#inv-items > div').forEach(function(item) {
+                    const ps = item.querySelectorAll('p');
+                    const price = item.querySelector('span');
+                    lineItems.push({
+                        name: ps[0] ? ps[0].textContent.trim() : '',
+                        detail: ps[1] ? ps[1].textContent.trim() : '',
+                        amount: price ? price.textContent.trim() : ''
+                    });
+                });
+                result.lineItems = lineItems;
+                return JSON.stringify({ success: true, invoice: result });
+            },
+
+            /* ── 15. update_invoice_line_items ── */
+            update_invoice_line_items: function({ items }) {
+                const container = document.getElementById('inv-items');
+                if (!container) return JSON.stringify({ success: false, error: 'Invoice items container not found' });
+                container.innerHTML = items.map(function(item) {
+                    const safeName   = String(item.name   || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    const safeDetail = String(item.detail || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    const safeAmt    = String(item.amount || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    return '<div class="flex justify-between py-3 font-sans text-sm">' +
+                        '<div><p class="text-charcoal">' + safeName + '</p>' +
+                        (safeDetail ? '<p class="text-charcoal text-xs mt-0.5">' + safeDetail + '</p>' : '') +
+                        '</div><span class="text-charcoal font-medium">' + safeAmt + '</span></div>';
+                }).join('');
+                return JSON.stringify({ success: true, itemCount: items.length });
+            },
+
+            /* ── 16. update_invoice_status ── */
+            update_invoice_status: function({ client_name, status }) {
+                const row = _findClientRow(client_name);
+                if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
+                const valid = ['Paid', 'Sent', 'To Be Sent'];
+                if (!valid.includes(status)) return JSON.stringify({ success: false, error: 'Invalid status. Valid: Paid, Sent, To Be Sent' });
+                row.billing.invoiceStatus = status;
+                applyFilters();
+                return JSON.stringify({ success: true, client: row.customer.name, status });
+            },
+
+            /* ── 17. update_call_outcome ── */
+            update_call_outcome: function({ client_name, outcome }) {
+                const row = _findClientRow(client_name);
+                if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
+                row.call.outcome = outcome;
+                applyFilters();
+                return JSON.stringify({ success: true, client: row.customer.name, outcome });
+            },
+
+            /* ── 18. search_clients ── */
             search_clients: function({ query }) {
                 const input = document.getElementById('global-search');
                 input.value = query;
@@ -1298,7 +1376,7 @@
                 return JSON.stringify({ success: true, query });
             },
 
-            /* ── 15. filter_table ── */
+            /* ── 19. filter_table ── */
             filter_table: function({ date, outcome, invoice, sort } = {}) {
                 if (date    !== undefined) document.getElementById('filter-date').value    = date;
                 if (outcome !== undefined) document.getElementById('filter-outcome').value = outcome;
@@ -1308,7 +1386,7 @@
                 return JSON.stringify({ success: true, filters: { date, outcome, invoice, sort } });
             },
 
-            /* ── 16. scroll_to_client ── */
+            /* ── 20. scroll_to_client ── */
             scroll_to_client: function({ client_name }) {
                 const q = client_name.toLowerCase();
                 const rows = document.querySelectorAll('#crm-table-body tr');
