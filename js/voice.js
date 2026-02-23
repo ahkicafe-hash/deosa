@@ -14,7 +14,7 @@
     let _conv   = null;
     let _active = false;
 
-    /* ── Inject one-time CSS for the connecting spin state ── */
+    /* ── Inject CSS ── */
     const _style = document.createElement('style');
     _style.textContent = `
         @keyframes voice-connecting-spin {
@@ -23,7 +23,7 @@
         }
         #ai-voice-btn.voice-connecting {
             animation: voice-connecting-spin 1.2s linear infinite,
-                       none !important; /* override pulse-glow when connecting */
+                       none !important;
         }
         #ai-voice-btn.voice-error {
             border-color: rgba(239,68,68,0.85) !important;
@@ -32,6 +32,55 @@
     `;
     document.head.appendChild(_style);
 
+    /* ── Phone ring — plays exactly twice then resolves ─────────────────
+     *  UK-style ring: two 1-second bursts (400 Hz + 450 Hz) with a
+     *  0.4-second gap between them. Total duration: ~2.4 seconds.
+     *  Returns a Promise that resolves when both rings are finished.
+     */
+    function _ringTwice() {
+        return new Promise(function (resolve) {
+            try {
+                var ctx = new (window.AudioContext || window.webkitAudioContext)();
+                var t   = ctx.currentTime;
+
+                /* Mix two frequencies for a realistic phone-ring timbre */
+                [400, 450].forEach(function (freq) {
+                    var osc  = ctx.createOscillator();
+                    var gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.type = 'sine';
+                    osc.frequency.value = freq;
+
+                    gain.gain.setValueAtTime(0, t);
+
+                    /* Ring 1 — 0.0 s to 1.0 s */
+                    gain.gain.linearRampToValueAtTime(0.22, t + 0.03);
+                    gain.gain.setValueAtTime(0.22, t + 0.97);
+                    gain.gain.linearRampToValueAtTime(0, t + 1.0);
+
+                    /* Ring 2 — 1.4 s to 2.4 s */
+                    gain.gain.linearRampToValueAtTime(0.22, t + 1.43);
+                    gain.gain.setValueAtTime(0.22, t + 2.37);
+                    gain.gain.linearRampToValueAtTime(0, t + 2.4);
+
+                    osc.start(t);
+                    osc.stop(t + 2.4);
+                });
+
+                /* Resolve after both rings finish, then close the audio context */
+                setTimeout(function () {
+                    try { ctx.close(); } catch (_) {}
+                    resolve();
+                }, 2500);
+
+            } catch (e) {
+                /* AudioContext not available — skip ring and proceed */
+                resolve();
+            }
+        });
+    }
+
     /* ── UI state machine ── */
     function setVoiceUI(state) {
         const btn      = document.getElementById('ai-voice-btn');
@@ -39,11 +88,9 @@
         const liveIcon = document.getElementById('ai-live-icon');
         if (!btn) return;
 
-        /* Reset all dynamic classes / styles */
         btn.classList.remove('ai-live-glow', 'voice-connecting', 'voice-error');
         btn.style.opacity = '1';
 
-        /* Show idle phone icon by default */
         if (idleIcon) idleIcon.classList.remove('hidden');
         if (liveIcon) { liveIcon.classList.add('hidden'); liveIcon.classList.remove('flex'); }
 
@@ -77,11 +124,16 @@
     }
 
     /* ── Start a session ──
-     *  firstMessage (optional): overrides the agent's opening line,
-     *  used when auto-reconnecting after a page navigation.
+     *  Rings twice first, then connects to ElevenLabs so the agent
+     *  speaks immediately after the ring finishes.
      */
     async function voiceStart(firstMessage) {
+        if (_active) return;
         setVoiceUI('connecting');
+
+        /* Ring plays for ~2.4 s — session starts right after */
+        await _ringTwice();
+
         try {
             const { Conversation } = await import(
                 'https://cdn.jsdelivr.net/npm/@elevenlabs/client/+esm'
@@ -111,9 +163,7 @@
                     if (onMenu) {
                         return "You're already on our menu page — feel free to browse!";
                     }
-                    /* Flag the destination page to auto-reconnect */
                     sessionStorage.setItem('deosa_voice_return', '1');
-                    /* Delay lets Mary finish her sentence before the page changes */
                     setTimeout(function () {
                         window.location.href = 'catering.html';
                     }, 2600);
@@ -121,7 +171,6 @@
                 };
             }
 
-            /* Build session options */
             var sessionOpts = {
                 agentId: AGENT_ID,
                 clientTools: pageTools,
@@ -149,7 +198,6 @@
                 }
             };
 
-            /* Override opening line when returning from another page */
             if (firstMessage) {
                 sessionOpts.overrides = {
                     agent: { firstMessage: firstMessage }
@@ -179,26 +227,16 @@
 
     /* ── Public toggle ── */
     window.toggleAIVoice = async function () {
-        /* On non-catering pages, the button navigates to the menu and
-           auto-starts the call on arrival instead of starting here */
         var onCatering = window.location.pathname.toLowerCase().includes('catering');
         if (!onCatering) {
             sessionStorage.setItem('deosa_voice_return', '1');
             window.location.href = 'catering.html';
             return;
         }
-
-        if (_active) {
-            voiceStop();
-        } else {
-            voiceStart();
-        }
+        if (_active) { voiceStop(); } else { voiceStart(); }
     };
 
-    /* ── Auto-reconnect after page navigation ──────────────────────────
-     *  If the user was mid-conversation and Mary navigated them here,
-     *  automatically restart the session with a seamless handoff message.
-     */
+    /* ── Auto-reconnect after page navigation ── */
     if (sessionStorage.getItem('deosa_voice_return') === '1') {
         sessionStorage.removeItem('deosa_voice_return');
         setTimeout(function () {
