@@ -78,9 +78,10 @@
 
     /* ── Start a session ──
      *  firstMessage (optional): overrides the agent's opening line,
-     *  used when auto-reconnecting after a page navigation.
+     *  used when auto-reconnecting after a page navigation mid-conversation.
      */
     async function voiceStart(firstMessage) {
+        if (_active) return; /* guard against double-start */
         setVoiceUI('connecting');
         try {
             const { Conversation } = await import(
@@ -111,9 +112,9 @@
                     if (onMenu) {
                         return "You're already on our menu page — feel free to browse!";
                     }
-                    /* Flag the destination page to auto-reconnect */
+                    /* Flag the destination page to auto-reconnect mid-conversation */
                     sessionStorage.setItem('deosa_voice_return', '1');
-                    /* Delay lets Mary finish her sentence before the page changes */
+                    /* Delay lets the assistant finish her sentence before the page changes */
                     setTimeout(function () {
                         window.location.href = 'catering.html';
                     }, 2600);
@@ -149,7 +150,7 @@
                 }
             };
 
-            /* Override opening line when returning from another page */
+            /* Override opening line only for mid-conversation reconnects */
             if (firstMessage) {
                 sessionOpts.overrides = {
                     agent: { firstMessage: firstMessage }
@@ -179,11 +180,11 @@
 
     /* ── Public toggle ── */
     window.toggleAIVoice = async function () {
-        /* On non-catering pages, the button navigates to the menu and
-           auto-starts the call on arrival instead of starting here */
+        /* On non-catering pages, navigate to the menu and auto-start there.
+           Use a separate flag so the fresh call starts without a firstMessage override. */
         var onCatering = window.location.pathname.toLowerCase().includes('catering');
         if (!onCatering) {
-            sessionStorage.setItem('deosa_voice_return', '1');
+            sessionStorage.setItem('deosa_voice_autostart', '1');
             window.location.href = 'catering.html';
             return;
         }
@@ -195,18 +196,39 @@
         }
     };
 
-    /* ── Auto-reconnect after page navigation ──────────────────────────
-     *  If the user was mid-conversation and Mary navigated them here,
-     *  automatically restart the session with a seamless handoff message.
+    /* ── Helper: run after page is fully loaded ────────────────────────
+     *  Waits for window.load so all scripts/resources are ready, then
+     *  adds a small additional delay to let page animations settle.
+     */
+    function afterLoad(delay, fn) {
+        if (document.readyState === 'complete') {
+            setTimeout(fn, delay);
+        } else {
+            window.addEventListener('load', function () {
+                setTimeout(fn, delay);
+            }, { once: true });
+        }
+    }
+
+    /* ── Fresh auto-start: user clicked Instant Quote on another page ──
+     *  No firstMessage override — starts a normal, clean session.
+     */
+    if (sessionStorage.getItem('deosa_voice_autostart') === '1') {
+        sessionStorage.removeItem('deosa_voice_autostart');
+        afterLoad(600, function () { voiceStart(); });
+    }
+
+    /* ── Mid-conversation reconnect: assistant navigated user here ──────
+     *  Restarts with a handoff message so the conversation feels seamless.
      */
     if (sessionStorage.getItem('deosa_voice_return') === '1') {
         sessionStorage.removeItem('deosa_voice_return');
-        setTimeout(function () {
+        afterLoad(600, function () {
             voiceStart(
                 "I'm back! You're now on the De'Osa menu page. " +
                 "Let's pick up where we left off — what would you like to add to your order?"
             );
-        }, 700);
+        });
     }
 
 })();
