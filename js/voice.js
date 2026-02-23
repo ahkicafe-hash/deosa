@@ -9,20 +9,12 @@
 
 (function () {
 
-    const AGENT_ID  = window.VOICE_AGENT_ID || 'agent_2901kj45e7cnfszrrjfhfj4qdc8j';
+    const AGENT_ID = window.VOICE_AGENT_ID || 'agent_2901kj45e7cnfszrrjfhfj4qdc8j';
 
-    /* ── State ──────────────────────────────────────────────────────────
-     *  _connecting: true from button-press until onConnect fires.
-     *              Prevents a double-start during the 2.5 s ring window.
-     *  _active:    true once the session is live.
-     *  _navTimer:  pending navigate_to_menu timeout — cleared on stop.
-     */
-    let _conv       = null;
-    let _active     = false;
-    let _connecting = false;
-    let _navTimer   = null;
+    let _conv   = null;
+    let _active = false;
 
-    /* ── CSS ── */
+    /* ── Inject one-time CSS for the connecting spin state ── */
     const _style = document.createElement('style');
     _style.textContent = `
         @keyframes voice-connecting-spin {
@@ -31,7 +23,7 @@
         }
         #ai-voice-btn.voice-connecting {
             animation: voice-connecting-spin 1.2s linear infinite,
-                       none !important;
+                       none !important; /* override pulse-glow when connecting */
         }
         #ai-voice-btn.voice-error {
             border-color: rgba(239,68,68,0.85) !important;
@@ -40,69 +32,18 @@
     `;
     document.head.appendChild(_style);
 
-    /* ── Phone ring — plays exactly twice then resolves ─────────────────
-     *  UK-style: two 1-second bursts (400 Hz + 450 Hz) with a 0.4 s gap.
-     *  Total: ~2.4 s. Returns a Promise that resolves when both rings end.
-     *
-     *  FIX (iOS): AudioContext starts suspended on iOS Safari — resume()
-     *  must be called within the user-gesture handler to unlock audio.
-     */
-    function _ringTwice() {
-        return new Promise(function (resolve) {
-            var ctx;
-            try {
-                ctx = new (window.AudioContext || window.webkitAudioContext)();
-
-                /* iOS Safari: AudioContext starts suspended — must resume
-                 * synchronously within the user gesture call stack.        */
-                if (ctx.state === 'suspended') { ctx.resume(); }
-
-                var t = ctx.currentTime;
-
-                [400, 450].forEach(function (freq) {
-                    var osc  = ctx.createOscillator();
-                    var gain = ctx.createGain();
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    osc.type = 'sine';
-                    osc.frequency.value = freq;
-
-                    gain.gain.setValueAtTime(0, t);
-                    /* Ring 1 */
-                    gain.gain.linearRampToValueAtTime(0.22, t + 0.03);
-                    gain.gain.setValueAtTime(0.22, t + 0.97);
-                    gain.gain.linearRampToValueAtTime(0, t + 1.0);
-                    /* Ring 2 */
-                    gain.gain.linearRampToValueAtTime(0.22, t + 1.43);
-                    gain.gain.setValueAtTime(0.22, t + 2.37);
-                    gain.gain.linearRampToValueAtTime(0, t + 2.4);
-
-                    osc.start(t);
-                    osc.stop(t + 2.4);
-                });
-
-                setTimeout(function () {
-                    try { ctx.close(); } catch (_) {}
-                    resolve();
-                }, 2500);
-
-            } catch (e) {
-                /* AudioContext unavailable — close if partially created */
-                if (ctx) { try { ctx.close(); } catch (_) {} }
-                resolve();
-            }
-        });
-    }
-
     /* ── UI state machine ── */
     function setVoiceUI(state) {
-        var btn      = document.getElementById('ai-voice-btn');
-        var idleIcon = document.getElementById('ai-idle-icon');
-        var liveIcon = document.getElementById('ai-live-icon');
+        const btn      = document.getElementById('ai-voice-btn');
+        const idleIcon = document.getElementById('ai-idle-icon');
+        const liveIcon = document.getElementById('ai-live-icon');
         if (!btn) return;
 
+        /* Reset all dynamic classes / styles */
         btn.classList.remove('ai-live-glow', 'voice-connecting', 'voice-error');
         btn.style.opacity = '1';
+
+        /* Show idle phone icon by default */
         if (idleIcon) idleIcon.classList.remove('hidden');
         if (liveIcon) { liveIcon.classList.add('hidden'); liveIcon.classList.remove('flex'); }
 
@@ -113,241 +54,181 @@
                 if (idleIcon) idleIcon.classList.add('hidden');
                 if (liveIcon) { liveIcon.classList.remove('hidden'); liveIcon.classList.add('flex'); }
                 break;
+
             case 'listening':
                 btn.classList.add('ai-live-glow');
                 if (idleIcon) idleIcon.classList.add('hidden');
                 if (liveIcon) { liveIcon.classList.remove('hidden'); liveIcon.classList.add('flex'); }
                 break;
+
             case 'speaking':
                 btn.classList.add('ai-live-glow');
                 if (idleIcon) idleIcon.classList.add('hidden');
                 if (liveIcon) { liveIcon.classList.remove('hidden'); liveIcon.classList.add('flex'); }
                 break;
+
             case 'error':
                 btn.classList.add('voice-error');
                 break;
-            default: break;
+
+            default: /* idle */
+                break;
         }
     }
 
-    /* ── Build the session config ────────────────────────────────────────
-     *  Extracted so it can be reused for the WebSocket fallback attempt.
+    /* ── Start a session ──
+     *  firstMessage (optional): overrides the agent's opening line,
+     *  used when auto-reconnecting after a page navigation mid-conversation.
      */
-    function _buildSessionConfig(pageTools, greeting, connectionType) {
-        return {
-            agentId        : AGENT_ID,
-            connectionType : connectionType,
-            clientTools    : pageTools,
-            overrides      : {
-                agent: {
-                    firstMessage: greeting + ", I'm Elizabeth, your personal event consultant at De\u2019Osa Luxury Catering. May I start with your name?"
-                }
-            },
-
-            /* iOS: prefer headphone/earbud mic over the built-in wide-angle
-             * mic, which picks up speaker output and causes echo.          */
-            preferHeadphonesForIosDevices: true,
-
-            onConnect: function () {
-                _connecting = false;
-                _active     = true;
-                setVoiceUI('listening');
-            },
-
-            /* ── onDisconnect: clean up state only ──────────────────
-             *  DO NOT call endSession() here — the SDK has already
-             *  closed the WebSocket. Calling endSession() on a closed
-             *  socket causes "WebSocket already CLOSING/CLOSED" errors
-             *  (confirmed: github.com/elevenlabs/packages/issues/87).
-             */
-            onDisconnect: function () {
-                _conv       = null;
-                _active     = false;
-                _connecting = false;
-                setVoiceUI('idle');
-            },
-
-            onError: function (msg) {
-                console.error('[De\'Osa Voice]', msg);
-                _conv       = null;
-                _active     = false;
-                _connecting = false;
-                setVoiceUI('error');
-                setTimeout(function () { setVoiceUI('idle'); }, 3000);
-            },
-
-            onModeChange: function (d) {
-                if (!_active) return;
-                setVoiceUI(d.mode === 'speaking' ? 'speaking' : 'listening');
-            },
-
-            /* Page-specific hook — catering.html uses this to spotlight
-             * menu items as Elizabeth mentions them.                       */
-            onMessage: function (event) {
-                if (event.source === 'agent' &&
-                    typeof window.VOICE_ON_AGENT_RESPONSE === 'function') {
-                    try { window.VOICE_ON_AGENT_RESPONSE(event.message); } catch (_) {}
-                }
-            }
-        };
-    }
-
-    /* ── Start a session ─────────────────────────────────────────────────
-     *  1. Guards against double-start (_connecting OR _active).
-     *  2. Rings twice (~2.4 s) so it feels like a real phone call.
-     *  3. Mic permission, ring, and SDK fetch run in parallel.
-     *  4. Tries WebRTC first; falls back to WebSocket if carrier blocks UDP.
-     *  5. Pins SDK version to avoid silent breaking changes from @latest.
-     *
-     *  Mobile fixes:
-     *   - AudioContext.resume() for iOS (ring was silent without this)
-     *   - Mic stream tracks stopped immediately after permission grant
-     *     (leaving them open blocks the SDK's own getUserMedia on iOS)
-     *   - Enhanced audio constraints (echoCancellation, noiseSuppression)
-     *   - preferHeadphonesForIosDevices routed to SDK session config
-     *   - WebSocket fallback if WebRTC ICE fails on cellular networks
-     */
-    async function voiceStart() {
-        if (_active || _connecting) return;
-        _connecting = true;
+    async function voiceStart(firstMessage) {
+        if (_active) return; /* guard against double-start */
         setVoiceUI('connecting');
-
         try {
-            /* Ring, mic permission, and SDK fetch all run in parallel.
-             *
-             * FIX (iOS mic): We stop the permission stream's tracks
-             * immediately after the grant. On iOS Safari, leaving a
-             * MediaStream open holds the mic exclusively — the SDK's
-             * internal getUserMedia then fails or gets degraded audio.
-             *
-             * FIX (mobile audio): explicit echoCancellation + noiseSuppression
-             * constraints give much cleaner audio on phone speakers.       */
-            const [,, sdkModule] = await Promise.all([
-                _ringTwice(),
-                navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        echoCancellation : true,
-                        noiseSuppression : true,
-                        sampleRate       : { ideal: 16000 }
-                    }
-                }).then(function (s) {
-                    /* Release the mic — we only needed the permission grant.
-                     * The SDK will open its own stream when it connects.   */
-                    s.getTracks().forEach(function (t) { t.stop(); });
-                }),
-                import('https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm')
-            ]);
-
-            /* Bail if the call was cancelled during the ring */
-            if (!_connecting) return;
-
-            const { Conversation } = sdkModule;
+            const { Conversation } = await import(
+                'https://cdn.jsdelivr.net/npm/@elevenlabs/client/+esm'
+            );
 
             /* Merge page-specific tools with universal tools */
-            var pageTools = window.VOICE_CLIENT_TOOLS || {};
+            const pageTools = window.VOICE_CLIENT_TOOLS || {};
 
-            /* get_current_time */
+            /* get_current_time — returns UK time + greeting word */
             if (!pageTools.get_current_time) {
                 pageTools.get_current_time = function () {
-                    try {
-                        var now    = new Date();
-                        var ukTime = new Date(now.toLocaleString('en-GB', { timeZone: 'Europe/London' }));
-                        var hour   = ukTime.getHours();
-                        var mins   = String(ukTime.getMinutes()).padStart(2, '0');
-                        var greeting =
-                            hour >= 5  && hour < 12 ? 'Good morning' :
-                            hour >= 12 && hour < 18 ? 'Good afternoon' : 'Good evening';
-                        return JSON.stringify({ time: hour + ':' + mins, greeting: greeting });
-                    } catch (e) {
-                        return JSON.stringify({ time: 'unknown', greeting: 'Hello' });
-                    }
+                    var now    = new Date();
+                    var ukTime = new Date(now.toLocaleString('en-GB', { timeZone: 'Europe/London' }));
+                    var hour   = ukTime.getHours();
+                    var mins   = String(ukTime.getMinutes()).padStart(2, '0');
+                    var greeting =
+                        hour >= 5  && hour < 12 ? 'Good morning' :
+                        hour >= 12 && hour < 18 ? 'Good afternoon' : 'Good evening';
+                    return JSON.stringify({ time: hour + ':' + mins, greeting: greeting });
                 };
             }
 
-            /* navigate_to_menu — stores timeout ref so it can be cancelled */
+            /* navigate_to_menu — soft-nav with auto-reconnect on arrival */
             if (!pageTools.navigate_to_menu) {
                 pageTools.navigate_to_menu = function () {
-                    try {
-                        var onMenu = window.location.pathname.toLowerCase().includes('catering');
-                        if (onMenu) return "You're already on our menu page — feel free to browse!";
-                        sessionStorage.setItem('deosa_voice_return', '1');
-                        _navTimer = setTimeout(function () {
-                            window.location.href = 'catering.html';
-                        }, 2600);
-                        return "I'm taking you to our menu page right now — I'll be right with you there.";
-                    } catch (e) {
-                        return 'Navigation is not available right now.';
+                    var onMenu = window.location.pathname.toLowerCase().includes('catering');
+                    if (onMenu) {
+                        return "You're already on our menu page — feel free to browse!";
                     }
+                    /* Flag the destination page to auto-reconnect mid-conversation */
+                    sessionStorage.setItem('deosa_voice_return', '1');
+                    /* Delay lets the assistant finish her sentence before the page changes */
+                    setTimeout(function () {
+                        window.location.href = 'catering.html';
+                    }, 2600);
+                    return "I'm taking you to our menu page right now — I'll be right with you there.";
                 };
             }
 
-            /* Compute greeting from UK time (same logic as get_current_time) */
-            var _greeting = (function () {
-                try {
-                    var now    = new Date();
-                    var ukHour = new Date(now.toLocaleString('en-GB', { timeZone: 'Europe/London' })).getHours();
-                    return ukHour >= 5 && ukHour < 12 ? 'Good morning' :
-                           ukHour >= 12 && ukHour < 18 ? 'Good afternoon' : 'Good evening';
-                } catch (e) { return 'Good day'; }
-            })();
+            /* Build session options */
+            var sessionOpts = {
+                agentId: AGENT_ID,
+                clientTools: pageTools,
 
-            /* Try WebRTC first (lower latency). If the carrier's firewall
-             * blocks UDP, catch the error and retry over WebSocket.        */
-            try {
-                _conv = await Conversation.startSession(
-                    _buildSessionConfig(pageTools, _greeting, 'webrtc')
-                );
-            } catch (webrtcErr) {
-                console.warn('[De\'Osa Voice] WebRTC failed, retrying over WebSocket:', webrtcErr);
-                if (!_connecting) return;
-                _conv = await Conversation.startSession(
-                    _buildSessionConfig(pageTools, _greeting, 'websocket')
-                );
+                onConnect: function () {
+                    _active = true;
+                    setVoiceUI('listening');
+                },
+
+                onDisconnect: function () {
+                    if (_active) voiceStop();
+                },
+
+                onError: function (msg) {
+                    console.error('[De\'Osa Voice]', msg);
+                    _conv   = null;
+                    _active = false;
+                    setVoiceUI('error');
+                    setTimeout(function () { setVoiceUI('idle'); }, 3000);
+                },
+
+                onModeChange: function (d) {
+                    if (!_active) return;
+                    setVoiceUI(d.mode === 'speaking' ? 'speaking' : 'listening');
+                }
+            };
+
+            /* Override opening line only for mid-conversation reconnects */
+            if (firstMessage) {
+                sessionOpts.overrides = {
+                    agent: { firstMessage: firstMessage }
+                };
             }
+
+            _conv = await Conversation.startSession(sessionOpts);
 
         } catch (err) {
             console.error('[De\'Osa Voice] Failed to start session:', err);
-            _conv       = null;
-            _active     = false;
-            _connecting = false;
+            _conv   = null;
+            _active = false;
             setVoiceUI('error');
             setTimeout(function () { setVoiceUI('idle'); }, 3000);
         }
     }
 
-    /* ── End a session (user-initiated) ── */
+    /* ── End a session ── */
     async function voiceStop() {
-        _active     = false;
-        _connecting = false;
-
-        /* Cancel any pending page navigation from navigate_to_menu */
-        if (_navTimer) { clearTimeout(_navTimer); _navTimer = null; }
-        /* Also clear the reconnect flag so the destination page won't auto-start */
-        sessionStorage.removeItem('deosa_voice_return');
-
-        var conv = _conv;
-        _conv = null;
-        if (conv) {
-            try { await conv.endSession(); } catch (_) { /* ignore */ }
+        _active = false;
+        if (_conv) {
+            try { await _conv.endSession(); } catch (_) { /* ignore */ }
+            _conv = null;
         }
         setVoiceUI('idle');
     }
 
     /* ── Public toggle ── */
     window.toggleAIVoice = async function () {
+        /* On non-catering pages, navigate to the menu and auto-start there.
+           Use a separate flag so the fresh call starts without a firstMessage override. */
         var onCatering = window.location.pathname.toLowerCase().includes('catering');
         if (!onCatering) {
-            sessionStorage.setItem('deosa_voice_return', '1');
+            sessionStorage.setItem('deosa_voice_autostart', '1');
             window.location.href = 'catering.html';
             return;
         }
-        if (_active || _connecting) { voiceStop(); } else { voiceStart(); }
+
+        if (_active) {
+            voiceStop();
+        } else {
+            voiceStart();
+        }
     };
 
-    /* ── Auto-reconnect after page navigation ── */
+    /* ── Helper: run after page is fully loaded ────────────────────────
+     *  Waits for window.load so all scripts/resources are ready, then
+     *  adds a small additional delay to let page animations settle.
+     */
+    function afterLoad(delay, fn) {
+        if (document.readyState === 'complete') {
+            setTimeout(fn, delay);
+        } else {
+            window.addEventListener('load', function () {
+                setTimeout(fn, delay);
+            }, { once: true });
+        }
+    }
+
+    /* ── Fresh auto-start: user clicked Instant Quote on another page ──
+     *  No firstMessage override — starts a normal, clean session.
+     */
+    if (sessionStorage.getItem('deosa_voice_autostart') === '1') {
+        sessionStorage.removeItem('deosa_voice_autostart');
+        afterLoad(600, function () { voiceStart(); });
+    }
+
+    /* ── Mid-conversation reconnect: assistant navigated user here ──────
+     *  Restarts with a handoff message so the conversation feels seamless.
+     */
     if (sessionStorage.getItem('deosa_voice_return') === '1') {
         sessionStorage.removeItem('deosa_voice_return');
-        setTimeout(voiceStart, 700);
+        afterLoad(600, function () {
+            voiceStart(
+                "I'm back! You're now on the De'Osa menu page. " +
+                "Let's pick up where we left off — what would you like to add to your order?"
+            );
+        });
     }
 
 })();
