@@ -589,7 +589,7 @@
                 id: 1,
                 customer: { name: "Eleanor Vance", email: "eleanor.v@email.com", phone: "07912 345 678" },
                 order: { details: "Wedding — 150 Guests — Plated Multi-Course", venue: "Syon Park", date: "12 Aug 2026" },
-                call: { time: "12m 45s", outcome: "Booking Confirmed", hasRecording: true },
+                call: { time: "12m 45s", outcome: "Booking Confirmed", hasRecording: true, callDate: "Today, 14:22" },
                 comms: { textSent: true, textTime: "Today, 14:30" },
                 billing: { invoiceStatus: "Paid" }
             },
@@ -597,7 +597,7 @@
                 id: 2,
                 customer: { name: "Marcus Johnson", email: "mjohnson88@email.co.uk", phone: "07888 123 456" },
                 order: { details: "Corporate Gala — 300 Guests — Buffet", venue: "Battersea Arts Centre", date: "05 Nov 2026" },
-                call: { time: "08m 12s", outcome: "Quote Requested", hasRecording: true },
+                call: { time: "08m 12s", outcome: "Quote Requested", hasRecording: true, callDate: "Yesterday, 09:08" },
                 comms: { textSent: true, textTime: "Yesterday, 09:15" },
                 billing: { invoiceStatus: "Sent" }
             },
@@ -605,7 +605,7 @@
                 id: 3,
                 customer: { name: "Sarah & David", email: "sarah.david26@email.com", phone: "07771 987 654" },
                 order: { details: "Wedding — 80 Guests — Family Style", venue: "Chelsea Harbour Hotel", date: "22 Sep 2026" },
-                call: { time: "25m 00s", outcome: "Tasting Scheduled", hasRecording: true },
+                call: { time: "25m 00s", outcome: "Tasting Scheduled", hasRecording: true, callDate: "Mon 20 Feb, 11:35" },
                 comms: { textSent: false, textTime: "" },
                 billing: { invoiceStatus: "To Be Sent" }
             },
@@ -613,7 +613,7 @@
                 id: 4,
                 customer: { name: "Amina Bello", email: "abello.events@email.com", phone: "07555 321 098" },
                 order: { details: "Private Party — 30 Guests — Canapés & Drinks", venue: "Private Residence", date: "15 Jul 2026" },
-                call: { time: "04m 30s", outcome: "Information Sent", hasRecording: true },
+                call: { time: "04m 30s", outcome: "Information Sent", hasRecording: true, callDate: "Today, 10:00" },
                 comms: { textSent: true, textTime: "Today, 10:00" },
                 billing: { invoiceStatus: "To Be Sent" }
             },
@@ -621,7 +621,7 @@
                 id: 5,
                 customer: { name: "Jonathan Wright", email: "j.wright@email.co.uk", phone: "07444 888 999" },
                 order: { details: "Wedding — 200 Guests — Plated Multi-Course", venue: "The Willows", date: "10 Oct 2026" },
-                call: { time: "18m 20s", outcome: "Booking Confirmed", hasRecording: true },
+                call: { time: "18m 20s", outcome: "Booking Confirmed", hasRecording: true, callDate: "Fri 21 Feb, 16:45" },
                 comms: { textSent: true, textTime: "Mon, 16:45" },
                 billing: { invoiceStatus: "Paid" }
             }
@@ -1129,6 +1129,7 @@
 
         window.VOICE_CLIENT_TOOLS = {
 
+            /* ── 1. get_page_data ── */
             get_page_data: function() {
                 try {
                     const now  = new Date();
@@ -1146,9 +1147,10 @@
                             phone: r.customer.phone,
                             event: r.order.details,
                             venue: r.order.venue,
-                            date: r.order.date,
+                            eventDate: r.order.date,
                             callOutcome: r.call.outcome,
                             callDuration: r.call.time,
+                            callDate: r.call.callDate || 'Unknown',
                             invoiceStatus: r.billing.invoiceStatus,
                             textSent: r.comms.textSent
                         })),
@@ -1159,10 +1161,46 @@
                 }
             },
 
+            /* ── 2. get_stats ── */
+            get_stats: function({ period } = {}) {
+                const p = (period || 'today').toLowerCase();
+                const key = p.includes('week') ? 'week' : p.includes('month') ? 'month' : 'today';
+                const d = metricData[key];
+                setMetricPeriod(key);
+                return JSON.stringify({
+                    period: key,
+                    totalCalls: d.calls,
+                    confirmedBookings: d.confirmed,
+                    invoicesSent: d.invoices,
+                    pendingPayments: d.pending
+                });
+            },
+
+            /* ── 3. get_client_details ── */
+            get_client_details: function({ client_name }) {
+                const row = _findClientRow(client_name);
+                if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
+                return JSON.stringify({
+                    success: true,
+                    name: row.customer.name,
+                    email: row.customer.email,
+                    phone: row.customer.phone,
+                    event: row.order.details,
+                    venue: row.order.venue,
+                    eventDate: row.order.date,
+                    callOutcome: row.call.outcome,
+                    callDuration: row.call.time,
+                    callDate: row.call.callDate || 'Unknown',
+                    invoiceStatus: row.billing.invoiceStatus,
+                    textSent: row.comms.textSent,
+                    textTime: row.comms.textTime || 'N/A'
+                });
+            },
+
+            /* ── 4. open_client_media ── */
             open_client_media: function({ client_name }) {
                 const row = _findClientRow(client_name);
                 if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
-                /* Try to match an EL conversation by client first name in metadata */
                 const firstName = row.customer.name.split(' ')[0].toLowerCase();
                 const elCall = (window._elCalls || []).find(c => {
                     try { return JSON.stringify(c).toLowerCase().includes(firstName); } catch(_) { return false; }
@@ -1172,6 +1210,13 @@
                 return JSON.stringify({ success: true, client: row.customer.name, hasRecording: !!convId });
             },
 
+            /* ── 5. close_media_drawer ── */
+            close_media_drawer: function() {
+                closeTranscript();
+                return JSON.stringify({ success: true });
+            },
+
+            /* ── 6. open_client_invoice ── */
             open_client_invoice: function({ client_name }) {
                 const row = _findClientRow(client_name);
                 if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
@@ -1179,6 +1224,13 @@
                 return JSON.stringify({ success: true, client: row.customer.name });
             },
 
+            /* ── 7. close_invoice_drawer ── */
+            close_invoice_drawer: function() {
+                closeInvoice();
+                return JSON.stringify({ success: true });
+            },
+
+            /* ── 8. open_client_text ── */
             open_client_text: function({ client_name }) {
                 const row = _findClientRow(client_name);
                 if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
@@ -1186,6 +1238,7 @@
                 return JSON.stringify({ success: true, client: row.customer.name });
             },
 
+            /* ── 9. open_client_email ── */
             open_client_email: function({ client_name }) {
                 const row = _findClientRow(client_name);
                 if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
@@ -1193,6 +1246,51 @@
                 return JSON.stringify({ success: true, client: row.customer.name });
             },
 
+            /* ── 10. close_comms_sheet ── */
+            close_comms_sheet: function() {
+                closeCommsSheet();
+                return JSON.stringify({ success: true });
+            },
+
+            /* ── 11. update_invoice_field ── */
+            update_invoice_field: function({ field, value }) {
+                const fieldMap = {
+                    name: 'inv-name', email: 'inv-email', phone: 'inv-phone',
+                    event: 'inv-event', venue: 'inv-venue', ref: 'invoice-ref',
+                    issued: 'inv-issued', due: 'inv-due'
+                };
+                const el = document.getElementById(fieldMap[field]);
+                if (!el) return JSON.stringify({ success: false, error: 'Unknown field "' + field + '". Valid: name, email, phone, event, venue, ref, issued, due' });
+                el.textContent = value;
+                el.style.transition = 'color 0.4s';
+                el.style.color = '#94a3b8';
+                setTimeout(() => { el.style.color = ''; }, 1500);
+                return JSON.stringify({ success: true, field, value });
+            },
+
+            /* ── 12. update_contact_field ── */
+            update_contact_field: function({ field, value }) {
+                const fieldMap = { name: 'drawer-contact-name', email: 'drawer-email', phone: 'drawer-phone' };
+                const el = document.getElementById(fieldMap[field]);
+                if (!el) return JSON.stringify({ success: false, error: 'Unknown field "' + field + '". Valid: name, email, phone' });
+                el.textContent = value;
+                if (field === 'name') document.getElementById('drawer-client-name').textContent = value;
+                el.style.transition = 'color 0.4s';
+                el.style.color = '#94a3b8';
+                setTimeout(() => { el.style.color = ''; }, 1500);
+                return JSON.stringify({ success: true, field, value });
+            },
+
+            /* ── 13. update_comms_content ── */
+            update_comms_content: function({ type, content }) {
+                const bodyEl = document.getElementById('comms-sheet-body');
+                if (!bodyEl) return JSON.stringify({ success: false, error: 'Comms sheet not found' });
+                const safe = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                bodyEl.innerHTML = `<div class="font-sans text-sm text-cream/80 leading-relaxed whitespace-pre-wrap">${safe}</div>`;
+                return JSON.stringify({ success: true, type, contentLength: content.length });
+            },
+
+            /* ── 14. search_clients ── */
             search_clients: function({ query }) {
                 const input = document.getElementById('global-search');
                 input.value = query;
@@ -1200,14 +1298,17 @@
                 return JSON.stringify({ success: true, query });
             },
 
-            filter_table: function({ date, outcome, invoice } = {}) {
+            /* ── 15. filter_table ── */
+            filter_table: function({ date, outcome, invoice, sort } = {}) {
                 if (date    !== undefined) document.getElementById('filter-date').value    = date;
                 if (outcome !== undefined) document.getElementById('filter-outcome').value = outcome;
                 if (invoice !== undefined) document.getElementById('filter-invoice').value = invoice;
+                if (sort    !== undefined) document.getElementById('sort-calls').value     = sort;
                 applyFilters();
-                return JSON.stringify({ success: true, filters: { date, outcome, invoice } });
+                return JSON.stringify({ success: true, filters: { date, outcome, invoice, sort } });
             },
 
+            /* ── 16. scroll_to_client ── */
             scroll_to_client: function({ client_name }) {
                 const q = client_name.toLowerCase();
                 const rows = document.querySelectorAll('#crm-table-body tr');
@@ -1223,30 +1324,6 @@
                     }
                 }
                 return JSON.stringify({ success: false, error: 'Row not found for "' + client_name + '"' });
-            },
-
-            update_invoice_field: function({ field, value }) {
-                const fieldMap = {
-                    name: 'inv-name', email: 'inv-email', phone: 'inv-phone',
-                    event: 'inv-event', venue: 'inv-venue', ref: 'invoice-ref',
-                    issued: 'inv-issued', due: 'inv-due'
-                };
-                const el = document.getElementById(fieldMap[field]);
-                if (!el) return JSON.stringify({ success: false, error: 'Unknown field "' + field + '"' });
-                el.textContent = value;
-                /* Brief silver flash to confirm the update */
-                el.style.transition = 'color 0.4s';
-                el.style.color = '#94a3b8';
-                setTimeout(() => { el.style.color = ''; }, 1500);
-                return JSON.stringify({ success: true, field, value });
-            },
-
-            update_comms_content: function({ type, content }) {
-                const bodyEl = document.getElementById('comms-sheet-body');
-                if (!bodyEl) return JSON.stringify({ success: false, error: 'Comms sheet not found' });
-                const safe = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                bodyEl.innerHTML = `<div class="font-sans text-sm text-cream/80 leading-relaxed whitespace-pre-wrap">${safe}</div>`;
-                return JSON.stringify({ success: true, type, contentLength: content.length });
             }
         };
     </script>
