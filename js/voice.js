@@ -270,7 +270,9 @@
     /* ── Public toggle ── */
     window.toggleAIVoice = async function () {
         var onCatering = window.location.pathname.toLowerCase().includes('catering');
-        if (!onCatering) {
+        /* If a page sets window.VOICE_AGENT_ID it is voice-capable — skip redirect */
+        var voiceEnabled = onCatering || !!window.VOICE_AGENT_ID;
+        if (!voiceEnabled) {
             sessionStorage.setItem('deosa_voice_return', '1');
             window.location.href = 'catering.html';
             return;

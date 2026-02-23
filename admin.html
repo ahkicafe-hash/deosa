@@ -140,6 +140,18 @@
             0%   { height: 6px;  opacity: 0.5; }
             100% { height: 20px; opacity: 1; }
         }
+
+        /* Admin-only overrides — silver instead of gold */
+        #ai-voice-btn { border-color: #94a3b8 !important; }
+        #ai-voice-btn #ai-idle-icon { color: #94a3b8 !important; }
+        #ai-voice-btn .ai-bar { background: #94a3b8 !important; }
+        #ai-voice-btn.ai-live-glow {
+            animation: admin-pulse 1.5s infinite alternate !important;
+        }
+        @keyframes admin-pulse {
+            from { box-shadow: 0 0 10px 2px rgba(148,163,184,0.4); }
+            to   { box-shadow: 0 0 25px 8px rgba(148,163,184,0.8); }
+        }
     </style>
 </head>
 <body class="noise selection:bg-gold selection:text-charcoal flex h-screen overflow-hidden">
@@ -433,6 +445,35 @@
                         <svg class="w-4 h-4 text-gold/60 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
                         <span id="drawer-phone" class="text-cream/80 text-sm font-light">—</span>
                     </div>
+                </div>
+            </div>
+
+            <!-- Call Recording Section (shown only when a convId is available) -->
+            <div id="drawer-recording-section" class="hidden dash-card p-5">
+                <p class="font-sans text-[10px] uppercase tracking-widest text-gold/70 mb-4">Call Recording</p>
+                <audio id="drawer-audio-el"></audio>
+                <div class="flex items-center gap-3">
+                    <button id="drawer-play-btn" onclick="toggleDrawerAudio()" class="w-10 h-10 rounded-full bg-cream/8 border border-cream/15 flex items-center justify-center text-cream/70 hover:border-gold/40 hover:text-gold transition-colors shrink-0">
+                        <svg id="drawer-play-icon" class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                        <svg id="drawer-pause-icon" class="w-4 h-4 hidden" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                    </button>
+                    <div class="flex-1">
+                        <div class="w-full bg-cream/10 rounded-full h-1.5 cursor-pointer" id="drawer-progress-bar" onclick="seekDrawerAudio(event)">
+                            <div id="drawer-progress-fill" class="bg-gold/70 h-1.5 rounded-full transition-none" style="width:0%"></div>
+                        </div>
+                        <div class="flex justify-between mt-1.5">
+                            <span id="drawer-elapsed" class="font-sans text-[10px] text-cream/30">0:00</span>
+                            <span id="drawer-total" class="font-sans text-[10px] text-cream/30">—</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transcript Section (shown only when a convId is available) -->
+            <div id="drawer-transcript-section" class="hidden">
+                <p class="font-sans text-[10px] uppercase tracking-widest text-gold/70 mb-4">Call Transcript</p>
+                <div id="drawer-transcript-messages" class="space-y-3">
+                    <!-- Chat bubbles populated dynamically -->
                 </div>
             </div>
 
@@ -756,12 +797,134 @@
             renderTable(filtered);
         }
 
+        /* ── ElevenLabs API constants ── */
+        const EL_API_KEY  = 'sk_4b4ff3b79f758ba057818d597d4aebbf980e9bc77ddd1102';
+        const EL_AGENT_ID = 'agent_2901kj45e7cnfszrrjfhfj4qdc8j';
+        const EL_BASE     = 'https://api.elevenlabs.io/v1/convai/conversations';
+
+        window._elCalls = [];
+
+        async function loadCallRecordings() {
+            try {
+                const res = await fetch(`${EL_BASE}?agent_id=${EL_AGENT_ID}&page_size=50`, {
+                    headers: { 'xi-api-key': EL_API_KEY }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                window._elCalls = data.conversations || [];
+            } catch (e) {
+                console.warn('[De\'Osa] EL call recordings load failed:', e);
+            }
+        }
+
+        function _fmtTime(s) {
+            if (!isFinite(s) || s < 0) return '0:00';
+            const m = Math.floor(s / 60);
+            const sec = String(Math.floor(s % 60)).padStart(2, '0');
+            return `${m}:${sec}`;
+        }
+
+        async function showDrawerRecording(convId) {
+            try {
+                const res = await fetch(`${EL_BASE}/${convId}/audio`, {
+                    headers: { 'xi-api-key': EL_API_KEY }
+                });
+                if (!res.ok) return;
+                const blob = await res.blob();
+                const url  = URL.createObjectURL(blob);
+                const audio = document.getElementById('drawer-audio-el');
+                audio.src = url;
+                audio.onloadedmetadata = () => {
+                    document.getElementById('drawer-total').textContent = _fmtTime(audio.duration);
+                };
+                audio.ontimeupdate = () => {
+                    const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+                    document.getElementById('drawer-progress-fill').style.width = pct + '%';
+                    document.getElementById('drawer-elapsed').textContent = _fmtTime(audio.currentTime);
+                };
+                audio.onended = () => {
+                    document.getElementById('drawer-play-icon').classList.remove('hidden');
+                    document.getElementById('drawer-pause-icon').classList.add('hidden');
+                };
+                document.getElementById('drawer-recording-section').classList.remove('hidden');
+            } catch (e) {
+                console.warn('[De\'Osa] Could not load recording:', e);
+            }
+        }
+
+        async function showDrawerTranscript(convId) {
+            try {
+                const res  = await fetch(`${EL_BASE}/${convId}`, {
+                    headers: { 'xi-api-key': EL_API_KEY }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                const msgs = data.transcript || [];
+                const container = document.getElementById('drawer-transcript-messages');
+                container.innerHTML = msgs.map(m => {
+                    const isAgent = m.role === 'agent';
+                    const safe = (m.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    return `<div class="flex ${isAgent ? 'justify-start' : 'justify-end'}">
+                        <div class="max-w-[85%] px-4 py-2.5 rounded-2xl font-sans text-xs leading-relaxed ${
+                            isAgent
+                                ? 'rounded-tl-sm bg-cream/8 border border-cream/10 text-cream/70'
+                                : 'rounded-tr-sm bg-gold/15 border border-gold/25 text-cream/85'
+                        }">${safe}</div>
+                    </div>`;
+                }).join('');
+                document.getElementById('drawer-transcript-section').classList.remove('hidden');
+            } catch (e) {
+                console.warn('[De\'Osa] Could not load transcript:', e);
+            }
+        }
+
+        window.toggleDrawerAudio = function() {
+            const audio = document.getElementById('drawer-audio-el');
+            if (audio.paused) {
+                audio.play();
+                document.getElementById('drawer-play-icon').classList.add('hidden');
+                document.getElementById('drawer-pause-icon').classList.remove('hidden');
+            } else {
+                audio.pause();
+                document.getElementById('drawer-play-icon').classList.remove('hidden');
+                document.getElementById('drawer-pause-icon').classList.add('hidden');
+            }
+        };
+
+        window.seekDrawerAudio = function(e) {
+            const audio = document.getElementById('drawer-audio-el');
+            if (!audio.duration) return;
+            const bar  = document.getElementById('drawer-progress-bar');
+            const rect = bar.getBoundingClientRect();
+            const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            audio.currentTime = pct * audio.duration;
+        };
+
         window.openTranscript = function(clientName, convId, email, phone) {
             drawerClientName.innerText = clientName;
             document.querySelector('#transcript-drawer h3').textContent = 'Interaction Details';
             document.getElementById('drawer-contact-name').textContent = clientName || '—';
             document.getElementById('drawer-email').textContent  = email  || '—';
             document.getElementById('drawer-phone').textContent  = phone  || '—';
+
+            /* Reset recording + transcript sections */
+            document.getElementById('drawer-recording-section').classList.add('hidden');
+            document.getElementById('drawer-transcript-section').classList.add('hidden');
+            const audio = document.getElementById('drawer-audio-el');
+            audio.pause();
+            audio.src = '';
+            document.getElementById('drawer-progress-fill').style.width = '0%';
+            document.getElementById('drawer-elapsed').textContent = '0:00';
+            document.getElementById('drawer-total').textContent = '—';
+            document.getElementById('drawer-play-icon').classList.remove('hidden');
+            document.getElementById('drawer-pause-icon').classList.add('hidden');
+            document.getElementById('drawer-transcript-messages').innerHTML = '';
+
+            if (convId) {
+                showDrawerRecording(convId);
+                showDrawerTranscript(convId);
+            }
+
             transcriptOverlay.classList.remove('hidden');
             setTimeout(() => {
                 transcriptOverlay.classList.remove('opacity-0');
@@ -783,7 +946,10 @@
         filterInvoice.addEventListener('change', applyFilters);
         sortCalls.addEventListener('change', applyFilters);
 
-        document.addEventListener('DOMContentLoaded', () => renderTable(crmData));
+        document.addEventListener('DOMContentLoaded', () => {
+            renderTable(crmData);
+            loadCallRecordings();
+        });
 
         /* Invoice drawer */
         const invoiceOverlay = document.getElementById('invoice-overlay');
@@ -951,6 +1117,139 @@
         </div>
         
     </button>
+    <script>
+        /* ── Admin page voice config — loaded before voice.js ── */
+        window.VOICE_AGENT_ID = 'agent_9901kj4sd0qgfnhaz37dhgttgdr2';
+
+        /* Fuzzy-match helper: finds first crmData row whose name includes query */
+        function _findClientRow(name) {
+            const q = name.toLowerCase();
+            return crmData.find(r => r.customer.name.toLowerCase().includes(q));
+        }
+
+        window.VOICE_CLIENT_TOOLS = {
+
+            get_page_data: function() {
+                try {
+                    const now  = new Date();
+                    const ukH  = parseInt(now.toLocaleString('en-GB', { timeZone: 'Europe/London', hour: 'numeric', hour12: false }));
+                    const ukT  = now.toLocaleString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' });
+                    const greeting = ukH < 12 ? 'Good morning' : ukH < 17 ? 'Good afternoon' : 'Good evening';
+                    return JSON.stringify({
+                        greeting,
+                        time: ukT,
+                        totalClients: crmData.length,
+                        clients: crmData.map(r => ({
+                            id: r.id,
+                            name: r.customer.name,
+                            email: r.customer.email,
+                            phone: r.customer.phone,
+                            event: r.order.details,
+                            venue: r.order.venue,
+                            date: r.order.date,
+                            callOutcome: r.call.outcome,
+                            callDuration: r.call.time,
+                            invoiceStatus: r.billing.invoiceStatus,
+                            textSent: r.comms.textSent
+                        })),
+                        callRecordingsLoaded: (window._elCalls || []).length
+                    });
+                } catch(e) {
+                    return JSON.stringify({ greeting: 'Hello', totalClients: 0, clients: [] });
+                }
+            },
+
+            open_client_media: function({ client_name }) {
+                const row = _findClientRow(client_name);
+                if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
+                /* Try to match an EL conversation by client first name in metadata */
+                const firstName = row.customer.name.split(' ')[0].toLowerCase();
+                const elCall = (window._elCalls || []).find(c => {
+                    try { return JSON.stringify(c).toLowerCase().includes(firstName); } catch(_) { return false; }
+                });
+                const convId = elCall ? elCall.conversation_id : null;
+                openTranscript(row.customer.name, convId, row.customer.email, row.customer.phone);
+                return JSON.stringify({ success: true, client: row.customer.name, hasRecording: !!convId });
+            },
+
+            open_client_invoice: function({ client_name }) {
+                const row = _findClientRow(client_name);
+                if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
+                openInvoice(row);
+                return JSON.stringify({ success: true, client: row.customer.name });
+            },
+
+            open_client_text: function({ client_name }) {
+                const row = _findClientRow(client_name);
+                if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
+                openCommsSheet('text', row.customer.name, row.comms.textTime || '');
+                return JSON.stringify({ success: true, client: row.customer.name });
+            },
+
+            open_client_email: function({ client_name }) {
+                const row = _findClientRow(client_name);
+                if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
+                openCommsSheet('email', row.customer.name, row.comms.textTime || '');
+                return JSON.stringify({ success: true, client: row.customer.name });
+            },
+
+            search_clients: function({ query }) {
+                const input = document.getElementById('global-search');
+                input.value = query;
+                input.dispatchEvent(new Event('input'));
+                return JSON.stringify({ success: true, query });
+            },
+
+            filter_table: function({ date, outcome, invoice } = {}) {
+                if (date    !== undefined) document.getElementById('filter-date').value    = date;
+                if (outcome !== undefined) document.getElementById('filter-outcome').value = outcome;
+                if (invoice !== undefined) document.getElementById('filter-invoice').value = invoice;
+                applyFilters();
+                return JSON.stringify({ success: true, filters: { date, outcome, invoice } });
+            },
+
+            scroll_to_client: function({ client_name }) {
+                const q = client_name.toLowerCase();
+                const rows = document.querySelectorAll('#crm-table-body tr');
+                for (const tr of rows) {
+                    const nameEl = tr.querySelector('.font-serif');
+                    if (nameEl && nameEl.textContent.toLowerCase().includes(q)) {
+                        tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        tr.style.outline = '2px solid rgba(148,163,184,0.55)';
+                        tr.style.outlineOffset = '-2px';
+                        tr.style.transition = 'outline 0.3s';
+                        setTimeout(() => { tr.style.outline = ''; tr.style.outlineOffset = ''; }, 2200);
+                        return JSON.stringify({ success: true, client: nameEl.textContent.trim() });
+                    }
+                }
+                return JSON.stringify({ success: false, error: 'Row not found for "' + client_name + '"' });
+            },
+
+            update_invoice_field: function({ field, value }) {
+                const fieldMap = {
+                    name: 'inv-name', email: 'inv-email', phone: 'inv-phone',
+                    event: 'inv-event', venue: 'inv-venue', ref: 'invoice-ref',
+                    issued: 'inv-issued', due: 'inv-due'
+                };
+                const el = document.getElementById(fieldMap[field]);
+                if (!el) return JSON.stringify({ success: false, error: 'Unknown field "' + field + '"' });
+                el.textContent = value;
+                /* Brief silver flash to confirm the update */
+                el.style.transition = 'color 0.4s';
+                el.style.color = '#94a3b8';
+                setTimeout(() => { el.style.color = ''; }, 1500);
+                return JSON.stringify({ success: true, field, value });
+            },
+
+            update_comms_content: function({ type, content }) {
+                const bodyEl = document.getElementById('comms-sheet-body');
+                if (!bodyEl) return JSON.stringify({ success: false, error: 'Comms sheet not found' });
+                const safe = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                bodyEl.innerHTML = `<div class="font-sans text-sm text-cream/80 leading-relaxed whitespace-pre-wrap">${safe}</div>`;
+                return JSON.stringify({ success: true, type, contentLength: content.length });
+            }
+        };
+    </script>
     <script src="js/voice.js"></script>
 </body>
 </html>
