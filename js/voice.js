@@ -43,12 +43,20 @@
     /* ── Phone ring — plays exactly twice then resolves ─────────────────
      *  UK-style: two 1-second bursts (400 Hz + 450 Hz) with a 0.4 s gap.
      *  Total: ~2.4 s. Returns a Promise that resolves when both rings end.
+     *
+     *  FIX (iOS): AudioContext starts suspended on iOS Safari — resume()
+     *  must be called within the user-gesture handler to unlock audio.
      */
     function _ringTwice() {
         return new Promise(function (resolve) {
             var ctx;
             try {
                 ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+                /* iOS Safari: AudioContext starts suspended — must resume
+                 * synchronously within the user gesture call stack.        */
+                if (ctx.state === 'suspended') { ctx.resume(); }
+
                 var t = ctx.currentTime;
 
                 [400, 450].forEach(function (freq) {
@@ -122,12 +130,82 @@
         }
     }
 
+    /* ── Build the session config ────────────────────────────────────────
+     *  Extracted so it can be reused for the WebSocket fallback attempt.
+     */
+    function _buildSessionConfig(pageTools, greeting, connectionType) {
+        return {
+            agentId        : AGENT_ID,
+            connectionType : connectionType,
+            clientTools    : pageTools,
+            overrides      : {
+                agent: {
+                    firstMessage: greeting + ", I'm Elizabeth, your personal event consultant at De\u2019Osa Luxury Catering. May I start with your name?"
+                }
+            },
+
+            /* iOS: prefer headphone/earbud mic over the built-in wide-angle
+             * mic, which picks up speaker output and causes echo.          */
+            preferHeadphonesForIosDevices: true,
+
+            onConnect: function () {
+                _connecting = false;
+                _active     = true;
+                setVoiceUI('listening');
+            },
+
+            /* ── onDisconnect: clean up state only ──────────────────
+             *  DO NOT call endSession() here — the SDK has already
+             *  closed the WebSocket. Calling endSession() on a closed
+             *  socket causes "WebSocket already CLOSING/CLOSED" errors
+             *  (confirmed: github.com/elevenlabs/packages/issues/87).
+             */
+            onDisconnect: function () {
+                _conv       = null;
+                _active     = false;
+                _connecting = false;
+                setVoiceUI('idle');
+            },
+
+            onError: function (msg) {
+                console.error('[De\'Osa Voice]', msg);
+                _conv       = null;
+                _active     = false;
+                _connecting = false;
+                setVoiceUI('error');
+                setTimeout(function () { setVoiceUI('idle'); }, 3000);
+            },
+
+            onModeChange: function (d) {
+                if (!_active) return;
+                setVoiceUI(d.mode === 'speaking' ? 'speaking' : 'listening');
+            },
+
+            /* Page-specific hook — catering.html uses this to spotlight
+             * menu items as Elizabeth mentions them.                       */
+            onMessage: function (event) {
+                if (event.source === 'agent' &&
+                    typeof window.VOICE_ON_AGENT_RESPONSE === 'function') {
+                    try { window.VOICE_ON_AGENT_RESPONSE(event.message); } catch (_) {}
+                }
+            }
+        };
+    }
+
     /* ── Start a session ─────────────────────────────────────────────────
      *  1. Guards against double-start (_connecting OR _active).
      *  2. Rings twice (~2.4 s) so it feels like a real phone call.
-     *  3. Requests mic permission explicitly (avoids mid-session prompts).
-     *  4. Connects via WebRTC for lower latency and better drop resilience.
+     *  3. Mic permission, ring, and SDK fetch run in parallel.
+     *  4. Tries WebRTC first; falls back to WebSocket if carrier blocks UDP.
      *  5. Pins SDK version to avoid silent breaking changes from @latest.
+     *
+     *  Mobile fixes:
+     *   - AudioContext.resume() for iOS (ring was silent without this)
+     *   - Mic stream tracks stopped immediately after permission grant
+     *     (leaving them open blocks the SDK's own getUserMedia on iOS)
+     *   - Enhanced audio constraints (echoCancellation, noiseSuppression)
+     *   - preferHeadphonesForIosDevices routed to SDK session config
+     *   - WebSocket fallback if WebRTC ICE fails on cellular networks
      */
     async function voiceStart() {
         if (_active || _connecting) return;
@@ -135,11 +213,28 @@
         setVoiceUI('connecting');
 
         try {
-            /* Ring, mic permission, and SDK fetch all run in parallel —
-             * eliminates 1–3 s of sequential latency, especially on mobile. */
+            /* Ring, mic permission, and SDK fetch all run in parallel.
+             *
+             * FIX (iOS mic): We stop the permission stream's tracks
+             * immediately after the grant. On iOS Safari, leaving a
+             * MediaStream open holds the mic exclusively — the SDK's
+             * internal getUserMedia then fails or gets degraded audio.
+             *
+             * FIX (mobile audio): explicit echoCancellation + noiseSuppression
+             * constraints give much cleaner audio on phone speakers.       */
             const [,, sdkModule] = await Promise.all([
                 _ringTwice(),
-                navigator.mediaDevices.getUserMedia({ audio: true }),
+                navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation : true,
+                        noiseSuppression : true,
+                        sampleRate       : { ideal: 16000 }
+                    }
+                }).then(function (s) {
+                    /* Release the mic — we only needed the permission grant.
+                     * The SDK will open its own stream when it connects.   */
+                    s.getTracks().forEach(function (t) { t.stop(); });
+                }),
                 import('https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm')
             ]);
 
@@ -186,7 +281,7 @@
                 };
             }
 
-            /* Compute greeting from UK time (same logic as get_current_time tool) */
+            /* Compute greeting from UK time (same logic as get_current_time) */
             var _greeting = (function () {
                 try {
                     var now    = new Date();
@@ -196,58 +291,19 @@
                 } catch (e) { return 'Good day'; }
             })();
 
-            _conv = await Conversation.startSession({
-                agentId        : AGENT_ID,
-                connectionType : 'webrtc',   /* WebRTC > WebSocket for reliability */
-                clientTools    : pageTools,
-                overrides      : {
-                    agent: {
-                        firstMessage: _greeting + ", I'm Elizabeth, your personal event consultant at De\u2019Osa Luxury Catering. May I start with your name?"
-                    }
-                },
-
-                onConnect: function () {
-                    _connecting = false;
-                    _active     = true;
-                    setVoiceUI('listening');
-                },
-
-                /* ── onDisconnect: clean up state only ──────────────────
-                 *  DO NOT call endSession() here — the SDK has already
-                 *  closed the WebSocket. Calling endSession() on a closed
-                 *  socket causes "WebSocket already CLOSING/CLOSED" errors
-                 *  (confirmed: github.com/elevenlabs/packages/issues/87).
-                 */
-                onDisconnect: function () {
-                    _conv       = null;
-                    _active     = false;
-                    _connecting = false;
-                    setVoiceUI('idle');
-                },
-
-                onError: function (msg) {
-                    console.error('[De\'Osa Voice]', msg);
-                    _conv       = null;
-                    _active     = false;
-                    _connecting = false;
-                    setVoiceUI('error');
-                    setTimeout(function () { setVoiceUI('idle'); }, 3000);
-                },
-
-                onModeChange: function (d) {
-                    if (!_active) return;
-                    setVoiceUI(d.mode === 'speaking' ? 'speaking' : 'listening');
-                },
-
-                /* Page-specific hook — catering.html uses this to spotlight
-                 * menu items as Elizabeth mentions them. */
-                onMessage: function (event) {
-                    if (event.source === 'agent' &&
-                        typeof window.VOICE_ON_AGENT_RESPONSE === 'function') {
-                        try { window.VOICE_ON_AGENT_RESPONSE(event.message); } catch (_) {}
-                    }
-                }
-            });
+            /* Try WebRTC first (lower latency). If the carrier's firewall
+             * blocks UDP, catch the error and retry over WebSocket.        */
+            try {
+                _conv = await Conversation.startSession(
+                    _buildSessionConfig(pageTools, _greeting, 'webrtc')
+                );
+            } catch (webrtcErr) {
+                console.warn('[De\'Osa Voice] WebRTC failed, retrying over WebSocket:', webrtcErr);
+                if (!_connecting) return;
+                _conv = await Conversation.startSession(
+                    _buildSessionConfig(pageTools, _greeting, 'websocket')
+                );
+            }
 
         } catch (err) {
             console.error('[De\'Osa Voice] Failed to start session:', err);
