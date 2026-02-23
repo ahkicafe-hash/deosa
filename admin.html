@@ -1121,6 +1121,21 @@
         /* ── Admin page voice config — loaded before voice.js ── */
         window.VOICE_AGENT_ID = 'agent_9901kj4sd0qgfnhaz37dhgttgdr2';
 
+        /* Pre-compute greeting + CRM summary so voice.js can pass them as
+         * dynamicVariables to startSession — the agent's first_message
+         * template uses these, bypassing the LLM + tool-call round-trips
+         * that were causing the long silence before the first word.        */
+        (function() {
+            const ukH = parseInt(new Date().toLocaleString('en-GB', {
+                timeZone: 'Europe/London', hour: 'numeric', hour12: false
+            }));
+            window.VOICE_DYNAMIC_VARS = {
+                greeting     : ukH < 12 ? 'Good morning' : ukH < 17 ? 'Good afternoon' : 'Good evening',
+                client_count : String(crmData.length),
+                client_names : crmData.map(r => r.customer.name).join(', ')
+            };
+        })();
+
         /* Fuzzy-match helper: finds first crmData row whose name includes query */
         function _findClientRow(name) {
             const q = name.toLowerCase();

@@ -194,16 +194,17 @@
                 };
             }
 
-            /* iOS Safari triggers an "Advanced Privacy" warning for WebRTC
-             * because WebRTC exposes the device's local IP address. Using
-             * WebSocket on iOS avoids the prompt entirely. Desktop keeps
-             * WebRTC for lower latency.                                    */
-            var _isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+            /* ElevenLabs' LiveKit WebRTC endpoint currently returns 404
+             * ("v1 RTC path not found"), causing the SDK to retry several
+             * times before falling back — adding 2-4 s of silence.
+             * Forcing WebSocket avoids the retry loop entirely.
+             * Revisit when EL confirms WebRTC is stable again.            */
 
             _conv = await Conversation.startSession({
-                agentId        : AGENT_ID,
-                connectionType : _isIOS ? 'websocket' : 'webrtc',
-                clientTools    : pageTools,
+                agentId          : AGENT_ID,
+                connectionType   : 'websocket',
+                dynamicVariables : window.VOICE_DYNAMIC_VARS || {},
+                clientTools      : pageTools,
 
                 onConnect: function () {
                     _connecting = false;
