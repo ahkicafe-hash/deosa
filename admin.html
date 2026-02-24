@@ -608,23 +608,23 @@
                 id: 1,
                 customer: { name: "Eleanor Vance", email: "eleanor.v@email.com", phone: "07912 345 678" },
                 order: { details: "Wedding — 150 Guests — Plated Multi-Course", venue: "Syon Park", date: "12 Aug 2026" },
-                call: { time: "12m 45s", outcome: "Booking Confirmed", hasRecording: true, callDate: "Today, 14:22" },
-                comms: { textSent: true, textTime: "Today, 14:30" },
+                call: { time: "12m 45s", outcome: "Booking Confirmed", hasRecording: true, callDate: "2026-02-24T14:22:00" },
+                comms: { textSent: true, textTime: "2026-02-24T14:30:00" },
                 billing: { invoiceStatus: "Paid", subtotal: "£16,850.00", depositLabel: "Deposit Paid (25%)", deposit: "– £4,212.50", balance: "£12,637.50", terms: "Due by 12 July 2026 · Bank transfer or card accepted" }
             },
             {
                 id: 2,
                 customer: { name: "Marcus Johnson", email: "mjohnson88@email.co.uk", phone: "07888 123 456" },
                 order: { details: "Corporate Gala — 300 Guests — Buffet", venue: "Battersea Arts Centre", date: "05 Nov 2026" },
-                call: { time: "08m 12s", outcome: "Quote Requested", hasRecording: true, callDate: "Yesterday, 09:08" },
-                comms: { textSent: true, textTime: "Yesterday, 09:15" },
+                call: { time: "08m 12s", outcome: "Quote Requested", hasRecording: true, callDate: "2026-02-23T09:08:00" },
+                comms: { textSent: true, textTime: "2026-02-23T09:15:00" },
                 billing: { invoiceStatus: "Sent", subtotal: "£28,500.00", depositLabel: "Deposit Paid (25%)", deposit: "– £7,125.00", balance: "£21,375.00", terms: "Due by 20 October 2026 · Bank transfer or card accepted" }
             },
             {
                 id: 3,
                 customer: { name: "Sarah & David", email: "sarah.david26@email.com", phone: "07771 987 654" },
                 order: { details: "Wedding — 80 Guests — Family Style", venue: "Chelsea Harbour Hotel", date: "22 Sep 2026" },
-                call: { time: "25m 00s", outcome: "Tasting Scheduled", hasRecording: true, callDate: "Mon 20 Feb, 11:35" },
+                call: { time: "25m 00s", outcome: "Tasting Scheduled", hasRecording: true, callDate: "2026-02-20T11:35:00" },
                 comms: { textSent: false, textTime: "" },
                 billing: { invoiceStatus: "To Be Sent", subtotal: "£10,150.00", depositLabel: "Deposit Paid (25%)", deposit: "– £2,537.50", balance: "£7,612.50", terms: "Due by 22 August 2026 · Bank transfer or card accepted" }
             },
@@ -632,19 +632,74 @@
                 id: 4,
                 customer: { name: "Amina Bello", email: "abello.events@email.com", phone: "07555 321 098" },
                 order: { details: "Private Party — 30 Guests — Canapés & Drinks", venue: "Private Residence", date: "15 Jul 2026" },
-                call: { time: "04m 30s", outcome: "Information Sent", hasRecording: true, callDate: "Today, 10:00" },
-                comms: { textSent: true, textTime: "Today, 10:00" },
+                call: { time: "04m 30s", outcome: "Information Sent", hasRecording: true, callDate: "2026-02-24T10:00:00" },
+                comms: { textSent: true, textTime: "2026-02-24T10:00:00" },
                 billing: { invoiceStatus: "To Be Sent", subtotal: "£3,400.00", depositLabel: "Deposit Paid (25%)", deposit: "– £850.00", balance: "£2,550.00", terms: "Due by 1 July 2026 · Bank transfer or card accepted" }
             },
             {
                 id: 5,
                 customer: { name: "Jonathan Wright", email: "j.wright@email.co.uk", phone: "07444 888 999" },
                 order: { details: "Wedding — 200 Guests — Plated Multi-Course", venue: "The Willows", date: "10 Oct 2026" },
-                call: { time: "18m 20s", outcome: "Booking Confirmed", hasRecording: true, callDate: "Fri 21 Feb, 16:45" },
-                comms: { textSent: true, textTime: "Mon, 16:45" },
+                call: { time: "18m 20s", outcome: "Booking Confirmed", hasRecording: true, callDate: "2026-01-30T16:45:00" },
+                comms: { textSent: true, textTime: "2026-01-30T16:45:00" },
                 billing: { invoiceStatus: "Paid", subtotal: "£24,700.00", depositLabel: "Deposit Paid (25%)", deposit: "– £6,175.00", balance: "£18,525.00", terms: "Due by 10 September 2026 · Bank transfer or card accepted" }
             }
         ];
+
+        /* ── Timestamp helpers ──────────────────────────────────────────────
+         * callDate in crmData is stored as ISO 8601 ("2026-02-24T14:22:00").
+         * These helpers format it for display and compute the filter period.
+         */
+        function _fmtDate(isoStr) {
+            if (!isoStr) return 'Unknown';
+            try {
+                const d    = new Date(isoStr);
+                const now  = new Date();
+                const msAgo = now - d;
+                const daysAgo = msAgo / 86400000;
+                const timeStr = d.toLocaleString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' });
+                if (daysAgo < 1)  return 'Today, '     + timeStr;
+                if (daysAgo < 2)  return 'Yesterday, ' + timeStr;
+                return d.toLocaleString('en-GB', { timeZone: 'Europe/London', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+            } catch (_) { return isoStr; }
+        }
+
+        function _datePeriod(isoStr) {
+            if (!isoStr) return 'month';
+            try {
+                const daysAgo = (new Date() - new Date(isoStr)) / 86400000;
+                if (daysAgo < 1) return 'today';
+                if (daysAgo < 7) return 'week';
+                return 'month';
+            } catch (_) { return 'month'; }
+        }
+
+        /* Returns { callDate, callDuration } — real EL values when a recording
+         * is matched by call_summary_title, otherwise formatted crmData values. */
+        function _realTimestamps(row) {
+            const nameParts = row.customer.name.toLowerCase().split(/\s+/).filter(p => p.length > 2 && p !== '&');
+            const elCall = (window._elCalls || []).find(c => {
+                const title = (c.call_summary_title || '').toLowerCase();
+                return nameParts.some(p => title.includes(p));
+            });
+            let callDate     = _fmtDate(row.call.callDate);
+            let callDuration = row.call.time;
+            if (elCall) {
+                if (elCall.start_time_unix_secs) {
+                    const d = new Date(elCall.start_time_unix_secs * 1000);
+                    callDate = d.toLocaleString('en-GB', {
+                        timeZone: 'Europe/London', day: '2-digit', month: 'short',
+                        year: 'numeric', hour: '2-digit', minute: '2-digit'
+                    });
+                }
+                if (elCall.call_duration_secs != null) {
+                    const m = Math.floor(elCall.call_duration_secs / 60);
+                    const s = elCall.call_duration_secs % 60;
+                    callDuration = m + 'm ' + String(s).padStart(2, '0') + 's';
+                }
+            }
+            return { callDate, callDuration };
+        }
 
         const tableBody         = document.getElementById('crm-table-body');
         const searchInput       = document.getElementById('global-search');
@@ -654,8 +709,9 @@
         const sortCalls         = document.getElementById('sort-calls');
         const noDataMsg         = document.getElementById('no-data-msg');
 
-        // Date period assigned to each row (today/week/month — cumulative so month includes week & today)
-        const rowDatePeriod = { 1: 'today', 2: 'week', 3: 'week', 4: 'today', 5: 'month' };
+        // Computed dynamically from ISO callDate — no longer a hardcoded map
+        const rowDatePeriod = {};
+        crmData.forEach(r => { rowDatePeriod[r.id] = _datePeriod(r.call.callDate); });
         const visibleCount      = document.getElementById('visible-count');
         const transcriptOverlay = document.getElementById('transcript-overlay');
         const transcriptDrawer  = document.getElementById('transcript-drawer');
@@ -747,7 +803,8 @@
                     </td>
                     <td class="p-4 align-top">
                         <p class="text-sm ${outcomeColor}">${row.call.outcome}</p>
-                        <p class="text-xs text-cream/35 mt-1 font-light">Duration: ${row.call.time}</p>
+                        <p class="text-xs text-cream/35 mt-1 font-light">${_fmtDate(row.call.callDate)}</p>
+                        <p class="text-xs text-cream/25 mt-0.5 font-light">Duration: ${row.call.time}</p>
                         <button onclick="_openMediaForRow(${row.id})" class="mt-2 text-xs uppercase tracking-widest font-medium text-gold/70 hover:text-gold flex items-center gap-1.5 transition-colors border border-gold/20 hover:border-gold/50 px-2.5 py-1.5 rounded-md">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
                             Open Media
@@ -919,32 +976,17 @@
             audio.currentTime = pct * audio.duration;
         };
 
-        /* Helper used by the table "Open Media" button — mirrors open_client_media tool logic */
+        /* Helper used by the table "Open Media" button */
         window._openMediaForRow = function(rowId) {
             const row = crmData.find(r => r.id === rowId);
             if (!row) return;
-            const firstName = row.customer.name.split(' ')[0].toLowerCase();
+            const nameParts = row.customer.name.toLowerCase().split(/\s+/).filter(p => p.length > 2 && p !== '&');
             const elCall = (window._elCalls || []).find(c => {
-                try { return JSON.stringify(c).toLowerCase().includes(firstName); } catch(_) { return false; }
+                const title = (c.call_summary_title || '').toLowerCase();
+                return nameParts.some(p => title.includes(p));
             });
             const convId = elCall ? elCall.conversation_id : null;
-            let callDate     = row.call.callDate || 'Unknown';
-            let callDuration = row.call.time;
-            if (elCall) {
-                if (elCall.start_time) {
-                    const d = new Date(elCall.start_time * 1000);
-                    callDate = d.toLocaleString('en-GB', {
-                        timeZone: 'Europe/London',
-                        day: '2-digit', month: 'short', year: 'numeric',
-                        hour: '2-digit', minute: '2-digit'
-                    });
-                }
-                if (elCall.call_duration_secs != null) {
-                    const m = Math.floor(elCall.call_duration_secs / 60);
-                    const s = elCall.call_duration_secs % 60;
-                    callDuration = m + 'm ' + String(s).padStart(2, '0') + 's';
-                }
-            }
+            const { callDate, callDuration } = _realTimestamps(row);
             openTranscript(row.customer.name, convId, row.customer.email, row.customer.phone, callDate, callDuration, row.call.outcome);
         };
 
@@ -1196,20 +1238,24 @@
                         greeting,
                         time: ukT,
                         totalClients: crmData.length,
-                        clients: crmData.map(r => ({
-                            id: r.id,
-                            name: r.customer.name,
-                            email: r.customer.email,
-                            phone: r.customer.phone,
-                            event: r.order.details,
-                            venue: r.order.venue,
-                            eventDate: r.order.date,
-                            callOutcome: r.call.outcome,
-                            callDuration: r.call.time,
-                            callDate: r.call.callDate || 'Unknown',
-                            invoiceStatus: r.billing.invoiceStatus,
-                            textSent: r.comms.textSent
-                        }))
+                        clients: crmData.map(r => {
+                            const ts = _realTimestamps(r);
+                            return {
+                                id: r.id,
+                                name: r.customer.name,
+                                email: r.customer.email,
+                                phone: r.customer.phone,
+                                event: r.order.details,
+                                venue: r.order.venue,
+                                eventDate: r.order.date,
+                                callOutcome: r.call.outcome,
+                                callDuration: ts.callDuration,
+                                callDate: ts.callDate,
+                                invoiceStatus: r.billing.invoiceStatus,
+                                textSent: r.comms.textSent,
+                                textTime: r.comms.textTime ? _fmtDate(r.comms.textTime) : 'Not sent'
+                            };
+                        })
                     });
                 } catch(e) {
                     return JSON.stringify({ greeting: 'Hello', totalClients: 0, clients: [] });
@@ -1235,6 +1281,7 @@
             get_client_details: function({ client_name }) {
                 const row = _findClientRow(client_name);
                 if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
+                const ts = _realTimestamps(row);
                 return JSON.stringify({
                     success: true,
                     name: row.customer.name,
@@ -1244,11 +1291,11 @@
                     venue: row.order.venue,
                     eventDate: row.order.date,
                     callOutcome: row.call.outcome,
-                    callDuration: row.call.time,
-                    callDate: row.call.callDate || 'Unknown',
+                    callDuration: ts.callDuration,
+                    callDate: ts.callDate,
                     invoiceStatus: row.billing.invoiceStatus,
                     textSent: row.comms.textSent,
-                    textTime: row.comms.textTime || 'N/A'
+                    textTime: row.comms.textTime ? _fmtDate(row.comms.textTime) : 'Not sent'
                 });
             },
 
@@ -1256,31 +1303,13 @@
             open_client_media: function({ client_name }) {
                 const row = _findClientRow(client_name);
                 if (!row) return JSON.stringify({ success: false, error: 'No client found matching "' + client_name + '"' });
-                const firstName = row.customer.name.split(' ')[0].toLowerCase();
+                const nameParts = row.customer.name.toLowerCase().split(/\s+/).filter(p => p.length > 2 && p !== '&');
                 const elCall = (window._elCalls || []).find(c => {
-                    try { return JSON.stringify(c).toLowerCase().includes(firstName); } catch(_) { return false; }
+                    const title = (c.call_summary_title || '').toLowerCase();
+                    return nameParts.some(p => title.includes(p));
                 });
                 const convId = elCall ? elCall.conversation_id : null;
-
-                /* Use real EL recording timestamps when available */
-                let callDate     = row.call.callDate || 'Unknown';
-                let callDuration = row.call.time;
-                if (elCall) {
-                    if (elCall.start_time) {
-                        const d = new Date(elCall.start_time * 1000);
-                        callDate = d.toLocaleString('en-GB', {
-                            timeZone: 'Europe/London',
-                            day: '2-digit', month: 'short', year: 'numeric',
-                            hour: '2-digit', minute: '2-digit'
-                        });
-                    }
-                    if (elCall.call_duration_secs != null) {
-                        const m = Math.floor(elCall.call_duration_secs / 60);
-                        const s = elCall.call_duration_secs % 60;
-                        callDuration = m + 'm ' + String(s).padStart(2, '0') + 's';
-                    }
-                }
-
+                const { callDate, callDuration } = _realTimestamps(row);
                 openTranscript(row.customer.name, convId, row.customer.email, row.customer.phone, callDate, callDuration, row.call.outcome);
                 return JSON.stringify({
                     success: true,
@@ -1335,7 +1364,7 @@
                     success: true,
                     client: row.customer.name,
                     textSent: row.comms.textSent,
-                    textTime: row.comms.textTime || 'Not sent'
+                    textTime: row.comms.textTime ? _fmtDate(row.comms.textTime) : 'Not sent'
                 });
             },
 
@@ -1348,7 +1377,7 @@
                     success: true,
                     client: row.customer.name,
                     textSent: row.comms.textSent,
-                    textTime: row.comms.textTime || 'Not sent'
+                    textTime: row.comms.textTime ? _fmtDate(row.comms.textTime) : 'Not sent'
                 });
             },
 
